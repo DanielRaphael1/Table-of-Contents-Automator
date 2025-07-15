@@ -1,131 +1,64 @@
+
   #!/usr/bin/env bash
-  #
-  #   ▸ NOTES
-  #       - The TOC header must literally be "## Table of Contents".
 
   set -euo pipefail
 
-  ROOT=${1:-.}                            # directory to scan, default = current repo root
+  # Find all README files
+  find "${1:-.}" -type f -iname 'README*.md' -print0 | while IFS= read -r -d '' file; do
+      echo "Processing: $file"
 
-  # ------------------------------------------------------------------
-  # Helper ─ generate a TOC for a single file and write it to stdout
-  # ------------------------------------------------------------------
-  _gen_toc() {
-    local md_file=$1
-    local -a toc=()
-    declare -A seen=()
-    local in_code=0
+      # Create a temporary file
+      tmpfile=$(mktemp)
 
-    while IFS= read -r line; do
-      [[ $line =~ ^\`\`\` ]] && { (( in_code ^= 1 )); continue; }
-      (( in_code )) && continue
-      # Skip the TOC header itself
-      [[ $line == "## Table of Contents" ]] && continue
-      # Capture headers
-      [[ $line =~ ^\#{1,6}[[:space:]] ]] && toc+=("$line")
-    done < "$md_file"
+      # Generate TOC by finding all headers
+      echo "## Table of Contents" > "$tmpfile"
+      echo "" >> "$tmpfile"
 
-    # Check if we found any headers
-    if [[ ${#toc[@]} -eq 0 ]]; then
-      return 1
-    fi
+      # Extract headers (excluding the TOC header itself)
+      grep -E '^#{1,6} ' "$file" | grep -v '^## Table of Contents' | while IFS= read -r
+  header; do
+          # Get the header level
+          level=$(echo "$header" | sed 's/[^#].*$//' | wc -c)
+          level=$((level - 1))
 
-    printf '## Table of Contents\n\n'
-    for h in "${toc[@]}"; do
-      local level=${h%%[!#]*}            # "###"
-      local depth=${#level}              # 3
-      local indent; indent=$(printf '  %.0s' $(seq 1 $((depth-1))))
-      local text=${h#"$level"}; text=${text#" "}; text=${text%%[[:space:]]*}
-      local slug; slug=$(tr '[:upper:]' '[:lower:]' <<<"$text" \
-                     | tr -cd '[:alnum:][:space:]-_' \
-                     | tr ' ' '-' | tr -s '-')
-      local n=${seen["$text"]:-0}; seen["$text"]=$((n+1))
-      (( n > 0 )) && slug="${slug}-${n}"
-      printf '%s- [%s](#%s)\n' "$indent" "$text" "$slug"
-    done
-  }
+          # Get the header text
+          text=$(echo "$header" | sed 's/^#* *//')
 
-  # ------------------------------------------------------------------
-  # Main loop ─ iterate over every README*.md
-  # ------------------------------------------------------------------
-  mapfile -d '' FILES < <(find "$ROOT" -type f -iname 'README*.md' -print0 | sort -z)
-  [[ ${#FILES[@]} -eq 0 ]] && { echo "No README*.md files found in $ROOT" >&2; exit 0; }
+          # Create the link
+          link=$(echo "$text" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9 -]//g' | tr ' '
+  '-')
 
-  echo "🔍  Found ${#FILES[@]} README files. Updating TOCs…" >&2
+          # Add appropriate indentation
+          indent=""
+          for ((i=1; i<level; i++)); do
+              indent="  $indent"
+          done
 
-  for f in "${FILES[@]}"; do
-    echo "⚙️   Processing $f" >&2
+          # Write the TOC entry
+          echo "${indent}- [$text](#$link)" >> "$tmpfile"
+      done
 
-    # CRITICAL: First, read the ENTIRE file into memory
-    ORIGINAL_CONTENT=$(<"$f")
+      # Remove old TOC if it exists
+      if grep -q '^## Table of Contents' "$file"; then
+          # Create a new file without the old TOC
+          sed '/^## Table of Contents/,/^$/d' "$file" > "${tmpfile}.body"
+      else
+          # No existing TOC, just copy the file
+          cp "$file" "${tmpfile}.body"
+      fi
 
-    # If file is empty, skip it
-    if [[ -z "$ORIGINAL_CONTENT" ]]; then
-      echo "⚠️   File $f is empty, skipping..." >&2
-      continue
-    fi
+      # Combine new TOC with body
+      echo "" >> "$tmpfile"
+      cat "${tmpfile}.body" >> "$tmpfile"
 
-    # Generate TOC
-    TMP_TOC=$(mktemp)
-    if ! _gen_toc "$f" > "$TMP_TOC"; then
-      echo "⚠️   No headers found in $f, skipping..." >&2
-      rm -f "$TMP_TOC"
-      continue
-    fi
-
-    # Read the generated TOC
-    NEW_TOC=$(<"$TMP_TOC")
-    rm -f "$TMP_TOC"
-
-    # Now process the content
-    # First, remove any existing TOC section
-    # This uses sed to remove from "## Table of Contents" to the next "##" header or end of 
-  TOC
-    CONTENT_WITHOUT_TOC=$(echo "$ORIGINAL_CONTENT" | sed '/^## Table of 
-  Contents$/,/^##[[:space:]]/{ /^## Table of Contents$/d; /^##[[:space:]]/!d; }')
-
-    # If sed somehow emptied the content, use original
-    if [[ -z "$CONTENT_WITHOUT_TOC" ]] || [[ "${#CONTENT_WITHOUT_TOC}" -lt 10 ]]; then
-      CONTENT_WITHOUT_TOC="$ORIGINAL_CONTENT"
-    fi
-
-    # Find if there's a main header (single #)
-    if echo "$CONTENT_WITHOUT_TOC" | grep -q '^#[[:space:]][^#]'; then
-      # Insert TOC after the main header
-      NEW_CONTENT=$(echo "$CONTENT_WITHOUT_TOC" | awk -v toc="$NEW_TOC" '
-        /^#[[:space:]][^#]/ && !done {
-          print
-          print ""
-          print toc
-          print ""
-          done=1
-          next
-        }
-        {print}
-      ')
-    else
-      # No main header, prepend TOC
-      NEW_CONTENT="$NEW_TOC"$'\n\n'"$CONTENT_WITHOUT_TOC"
-    fi
-
-    # CRITICAL SAFETY CHECK: Ensure we didn't lose content
-    ORIGINAL_LENGTH=${#ORIGINAL_CONTENT}
-    NEW_LENGTH=${#NEW_CONTENT}
-
-    if [[ $NEW_LENGTH -lt $((ORIGINAL_LENGTH / 2)) ]]; then
-      echo "❌   ERROR: New content is suspiciously small!" >&2
-      echo "     Original: $ORIGINAL_LENGTH chars, New: $NEW_LENGTH chars" >&2
-      echo "     Skipping file to prevent data loss!" >&2
-      continue
-    fi
-
-    # Only write if we have substantial content
-    if [[ $NEW_LENGTH -gt 50 ]]; then
-      echo "$NEW_CONTENT" > "$f"
-      echo "✅   Successfully updated $f" >&2
-    else
-      echo "❌   ERROR: Resulting file would be too small, skipping!" >&2
-    fi
+      # Safety check - make sure the new file isn't empty
+      if [ -s "$tmpfile" ]; then
+          mv "$tmpfile" "$file"
+          echo "Updated: $file"
+      else
+          echo "ERROR: Generated file is empty, skipping $file"
+          rm -f "$tmpfile" "${tmpfile}.body"
+      fi
   done
 
-  echo "✅  All TOCs refreshed." >&2
+  echo "Done!"

@@ -72,8 +72,8 @@
     TMP_NEW=$(mktemp)
 
     # Read the original file and process it
-    local found_main_header=0
-    local skip_old_toc=0
+    found_main_header=0
+    skip_old_toc=0
 
     while IFS= read -r line; do
       # If we find "## Table of Contents", start skipping
@@ -82,16 +82,19 @@
         continue
       fi
 
-      # If we're skipping TOC and find a new section (## header) or after blank line + 
-  non-list line
+      # If we're skipping TOC and find a new section (## header)
       if [[ $skip_old_toc -eq 1 ]]; then
-        if [[ "$line" =~ ^##[[:space:]] ]] || ([[ -z "$line" ]] && ! [[ "${next_line:-}" =~ 
-  ^[[:space:]]*- ]]); then
+        if [[ "$line" =~ ^##[[:space:]] ]]; then
           skip_old_toc=0
+        elif [[ "$line" =~ ^[[:space:]]*- ]]; then
+          # Skip TOC list items
+          continue
+        elif [[ -z "$line" ]]; then
+          # Skip empty lines in TOC
+          continue
         else
-          # Skip TOC content (list items)
-          [[ "$line" =~ ^[[:space:]]*- ]] && continue
-          [[ -z "$line" ]] && continue
+          # Non-TOC content found, stop skipping
+          skip_old_toc=0
         fi
       fi
 

@@ -1,4 +1,4 @@
-# TocScript
+# Table of Contents Generator
 
 A simple and safe Table of Contents generator for Markdown files that can be used as a standalone script or GitHub Action.
 

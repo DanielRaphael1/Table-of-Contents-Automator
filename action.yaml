@@ -1,0 +1,15 @@
+# action.yml – lives at repo root
+name: "Generate Markdown TOC"
+description: "Adds or updates a Table of Contents in README.md"
+inputs:
+  target-file:
+    description: "Path to the Markdown file"
+    required: false
+    default: README.md
+runs:
+  using: "composite"
+  steps:
+    - shell: bash
+      run: |
+        chmod +x ${{ github.action_path }}/src/generate-toc.sh
+        ${{ github.action_path }}/src/generate-toc.sh "${{ inputs.target-file }}"

@@ -1,25 +1,15 @@
-name: "Generate Markdown TOC"
-description: "Adds or updates a Table of Contents in README.md"
-inputs:
-  target-dir:
-    description: "Path to the directory to scan for README files"
-    required: false
-    default: "."          # default to entire repo
-runs:
-  using: "composite"
-  steps:
-    - shell: bash
-      run: |
-        set -euo pipefail
-        chmod +x "${{ github.action_path }}/src/generate-toc.sh"
-
-        echo "🔍  Locating README files in directory '${{ inputs.target-dir }}'..."
-        mapfile -d '' files < <(
-          find "${{ github.workspace }}/${{ inputs.target-dir }}" -type f -iname 'README*.md' -print0
-        )
-
-        for f in "${files[@]}"; do
-          echo "⚙️  Generating TOC for $f"
-          tmpfile="$(mktemp)"
-          "${{ github.action_path }}/src/generate-toc.sh" "$f" > "$tmpfile" && mv "$tmpfile" "$f"
-        done
+  name: "Generate Markdown TOC"
+  description: "Adds or updates a Table of Contents in README.md files"
+  inputs:
+    target-dir:
+      description: "Path to the directory to scan for README files"
+      required: false
+      default: "."
+  runs:
+    using: "composite"
+    steps:
+      - shell: bash
+        run: |
+          set -e
+          chmod +x "${{ github.action_path }}/src/generate-toc.sh"
+          "${{ github.action_path }}/src/generate-toc.sh" "${{ inputs.target-dir }}"

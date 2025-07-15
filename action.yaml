@@ -11,5 +11,15 @@ runs:
   steps:
     - shell: bash
       run: |
-        chmod +x ${{ github.action_path }}/src/generate-toc.sh
-        ${{ github.action_path }}/src/generate-toc.sh "${{ inputs.target-file }}"
+        set -euo pipefail
+        chmod +x "${{ github.action_path }}/src/generate-toc.sh"
+
+        echo "🔍  Locating README files..."
+        mapfile -d '' files < <(
+          find "${{ github.workspace }}" -type f -iname 'README*.md' -print0
+        )
+
+        for f in "${files[@]}"; do
+          echo "⚙️  Generating TOC for $f"
+          "${{ github.action_path }}/src/generate-toc.sh" "$f" | sponge "$f"
+        done

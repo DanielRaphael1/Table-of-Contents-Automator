@@ -1,11 +1,10 @@
-# action.yml – lives at repo root
 name: "Generate Markdown TOC"
 description: "Adds or updates a Table of Contents in README.md"
 inputs:
-  target-file:
-    description: "Path to the Markdown file"
+  target-dir:
+    description: "Path to the directory to scan for README files"
     required: false
-    default: README.md
+    default: "."          # default to entire repo
 runs:
   using: "composite"
   steps:
@@ -14,9 +13,9 @@ runs:
         set -euo pipefail
         chmod +x "${{ github.action_path }}/src/generate-toc.sh"
 
-        echo "🔍  Locating README files..."
+        echo "🔍  Locating README files in directory '${{ inputs.target-dir }}'..."
         mapfile -d '' files < <(
-          find "${{ github.workspace }}" -type f -iname 'README*.md' -print0
+          find "${{ github.workspace }}/${{ inputs.target-dir }}" -type f -iname 'README*.md' -print0
         )
 
         for f in "${files[@]}"; do

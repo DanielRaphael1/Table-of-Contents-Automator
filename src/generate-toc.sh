@@ -6,7 +6,6 @@
   set -euo pipefail
 
   ROOT=${1:-.}                            # directory to scan, default = current repo root
-  SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
   # ------------------------------------------------------------------
   # Helper ─ generate a TOC for a single file and write it to stdout
@@ -57,91 +56,76 @@
   for f in "${FILES[@]}"; do
     echo "⚙️   Processing $f" >&2
 
-    # Create backup
-    cp "$f" "${f}.backup"
+    # CRITICAL: First, read the ENTIRE file into memory
+    ORIGINAL_CONTENT=$(<"$f")
 
-    # 1. generate fresh TOC
+    # If file is empty, skip it
+    if [[ -z "$ORIGINAL_CONTENT" ]]; then
+      echo "⚠️   File $f is empty, skipping..." >&2
+      continue
+    fi
+
+    # Generate TOC
     TMP_TOC=$(mktemp)
     if ! _gen_toc "$f" > "$TMP_TOC"; then
       echo "⚠️   No headers found in $f, skipping..." >&2
-      rm -f "${f}.backup" "$TMP_TOC"
+      rm -f "$TMP_TOC"
       continue
     fi
 
-    # 2. Create new file content
-    TMP_NEW=$(mktemp)
+    # Read the generated TOC
+    NEW_TOC=$(<"$TMP_TOC")
+    rm -f "$TMP_TOC"
 
-    # Read the original file and process it
-    found_main_header=0
-    skip_old_toc=0
+    # Now process the content
+    # First, remove any existing TOC section
+    # This uses sed to remove from "## Table of Contents" to the next "##" header or end of 
+  TOC
+    CONTENT_WITHOUT_TOC=$(echo "$ORIGINAL_CONTENT" | sed '/^## Table of 
+  Contents$/,/^##[[:space:]]/{ /^## Table of Contents$/d; /^##[[:space:]]/!d; }')
 
-    while IFS= read -r line; do
-      # If we find "## Table of Contents", start skipping
-      if [[ "$line" == "## Table of Contents" ]]; then
-        skip_old_toc=1
-        continue
-      fi
-
-      # If we're skipping TOC and find a new section (## header)
-      if [[ $skip_old_toc -eq 1 ]]; then
-        if [[ "$line" =~ ^##[[:space:]] ]]; then
-          skip_old_toc=0
-        elif [[ "$line" =~ ^[[:space:]]*- ]]; then
-          # Skip TOC list items
-          continue
-        elif [[ -z "$line" ]]; then
-          # Skip empty lines in TOC
-          continue
-        else
-          # Non-TOC content found, stop skipping
-          skip_old_toc=0
-        fi
-      fi
-
-      # If this is the main header and we haven't inserted TOC yet
-      if [[ "$line" =~ ^#[[:space:]][^#] ]] && [[ $found_main_header -eq 0 ]]; then
-        echo "$line" >> "$TMP_NEW"
-        echo "" >> "$TMP_NEW"
-        cat "$TMP_TOC" >> "$TMP_NEW"
-        echo "" >> "$TMP_NEW"
-        found_main_header=1
-      elif [[ $skip_old_toc -eq 0 ]]; then
-        echo "$line" >> "$TMP_NEW"
-      fi
-    done < "$f"
-
-    # If no main header was found, prepend TOC at beginning
-    if [[ $found_main_header -eq 0 ]]; then
-      cat "$TMP_TOC" > "${TMP_NEW}.final"
-      echo "" >> "${TMP_NEW}.final"
-      cat "$TMP_NEW" >> "${TMP_NEW}.final"
-      mv "${TMP_NEW}.final" "$TMP_NEW"
+    # If sed somehow emptied the content, use original
+    if [[ -z "$CONTENT_WITHOUT_TOC" ]] || [[ "${#CONTENT_WITHOUT_TOC}" -lt 10 ]]; then
+      CONTENT_WITHOUT_TOC="$ORIGINAL_CONTENT"
     fi
 
-    # Safety checks
-    if [[ ! -s "$TMP_NEW" ]]; then
-      echo "❌   ERROR: Result file is empty for $f" >&2
-      echo "     Restoring from backup..." >&2
-      mv "${f}.backup" "$f"
-      rm -f "$TMP_TOC" "$TMP_NEW"
+    # Find if there's a main header (single #)
+    if echo "$CONTENT_WITHOUT_TOC" | grep -q '^#[[:space:]][^#]'; then
+      # Insert TOC after the main header
+      NEW_CONTENT=$(echo "$CONTENT_WITHOUT_TOC" | awk -v toc="$NEW_TOC" '
+        /^#[[:space:]][^#]/ && !done {
+          print
+          print ""
+          print toc
+          print ""
+          done=1
+          next
+        }
+        {print}
+      ')
+    else
+      # No main header, prepend TOC
+      NEW_CONTENT="$NEW_TOC"$'\n\n'"$CONTENT_WITHOUT_TOC"
+    fi
+
+    # CRITICAL SAFETY CHECK: Ensure we didn't lose content
+    ORIGINAL_LENGTH=${#ORIGINAL_CONTENT}
+    NEW_LENGTH=${#NEW_CONTENT}
+
+    if [[ $NEW_LENGTH -lt $((ORIGINAL_LENGTH / 2)) ]]; then
+      echo "❌   ERROR: New content is suspiciously small!" >&2
+      echo "     Original: $ORIGINAL_LENGTH chars, New: $NEW_LENGTH chars" >&2
+      echo "     Skipping file to prevent data loss!" >&2
       continue
     fi
 
-    # Check we didn't lose too much content
-    original_size=$(wc -c < "${f}.backup")
-    new_size=$(wc -c < "$TMP_NEW")
-    if [[ $new_size -lt $((original_size / 2)) ]]; then
-      echo "❌   ERROR: New file is less than half the size of original" >&2
-      echo "     Restoring from backup..." >&2
-      mv "${f}.backup" "$f"
-      rm -f "$TMP_TOC" "$TMP_NEW"
-      continue
+    # Only write if we have substantial content
+    if [[ $NEW_LENGTH -gt 50 ]]; then
+      echo "$NEW_CONTENT" > "$f"
+      echo "✅   Successfully updated $f" >&2
+    else
+      echo "❌   ERROR: Resulting file would be too small, skipping!" >&2
     fi
-
-    # All checks passed, update the file
-    mv "$TMP_NEW" "$f"
-    rm -f "${f}.backup" "$TMP_TOC"
-    echo "✅   Successfully updated $f" >&2
   done
 
   echo "✅  All TOCs refreshed." >&2

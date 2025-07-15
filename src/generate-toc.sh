@@ -1,76 +1,74 @@
 #!/usr/bin/env bash
+#
+#   ▸ NOTES
+#       - The TOC header must literally be "## Table of Contents".
 
-FILE=${1:?No file was specified as first argument}
+set -euo pipefail
 
-declare -a TOC
-declare -A TOC_MAP
-CODE_BLOCK=0
-CODE_BLOCK_REGEX='^```'
-HEADING_REGEX='^#{1,}'
+ROOT=${1:-.}                            # directory to scan, default = current repo root
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+TMP=$(mktemp)
 
-while read -r LINE; do
-    # Treat code blocks
-    if [[ "${LINE}" =~ $CODE_BLOCK_REGEX ]]; then
-        # Ignore things until we see code block ending
-        CODE_BLOCK=$((CODE_BLOCK + 1))
-        if [[ "${CODE_BLOCK}" -eq 2 ]]; then
-            # We hit the closing code block
-            CODE_BLOCK=0
-        fi
-        continue
-    fi
+# ------------------------------------------------------------------
+# Helper ─ generate a TOC for a single file and write it to stdout
+# ------------------------------------------------------------------
+_gen_toc() {
+  local md_file=$1
+  local -a toc=()
+  declare -A seen=()
+  local in_code=0
 
-    # Treat normal line
-    if [[ "${CODE_BLOCK}" == 0 ]]; then
-        # If we see heading, we save it to ToC map
-        if [[ "${LINE}" =~ ${HEADING_REGEX} ]]; then
-            TOC+=("${LINE}")
-        fi
-    fi
-done < <(grep -v '## Table of Contents' "${FILE}")
+  while IFS= read -r line; do
+    [[ $line =~ ^\`\`\` ]] && { (( in_code ^= 1 )); continue; }
+    (( in_code )) && continue
+    [[ $line =~ ^\#{1,6}\  ]] && toc+=("$line")
+  done < <(grep -Ev '^## Table of Contents' "$md_file")
 
-echo -e "## Table of Contents\n"
-for LINE in "${TOC[@]}"; do
-    case "${LINE}" in
-        '#####'*)
-          echo -n "        - "
-          ;;
-        '####'*)
-          echo -n "      - "
-          ;;
-        '###'*)
-          echo -n "    - "
-          ;;
-        '##'*)
-          echo -n "  - "
-          ;;
-        '#'*)
-          echo -n "- "
-          ;;
-    esac
+  printf '## Table of Contents\n\n'
+  for h in "${toc[@]}"; do
+    local level=${h%%[!#]*}; local depth=${#level}
+    local indent; indent=$(printf '  %.0s' $(seq 1 $((depth-1))))
+    local text=${h#"$level"}; text=${text#" "}; text=${text%%[[:space:]]}
+    local slug; slug=$(tr '[:upper:]' '[:lower:]' <<<"$text" \
+                   | tr -cd '[:alnum:][:space:]-_' \
+                   | tr ' ' '-' | tr -s '-')
+    local n=${seen["$text"]:-0}; seen["$text"]=$((n+1))
+    (( n > 0 )) && slug="${slug}-${n}"
+    printf '%s- [%s](#%s)\n' "$indent" "$text" "$slug"
+  done
+}
 
-    LINK=${LINE}
-    # Detect markdown links in heading and remove link part from them
-    if grep -qE "\[.*\]\(.*\)" <<< "${LINK}"; then
-        LINK=$(sed 's/\(\]\)\((.*)\)/\1/' <<< "${LINK}")
-    fi
-    # Special characters (besides '-') in page links in markdown
-    # are deleted and spaces are converted to dashes
-    LINK=$(tr -dc "[:alnum:] _-" <<< "${LINK}")
-    LINK=${LINK/ /}
-    LINK=${LINK// /-}
-    LINK=${LINK,,}
-    LINK=$(tr -s "-" <<< "${LINK}")
+# ------------------------------------------------------------------
+# Main loop ─ iterate over every README*.md
+# ------------------------------------------------------------------
+mapfile -d '' FILES < <(find "$ROOT" -type f -iname 'README*.md' -print0 | sort -z)
+[[ ${#FILES[@]} -eq 0 ]] && { echo "No README*.md files found in $ROOT"; exit 0; }
 
-    # Print in format [Very Special Heading](#very-special-heading)
-    # Make sure to add "-X" suffix with correct increment for headings that are repeated
-    INDEX=${TOC_MAP[${LINE}]}
-    if [[ "${INDEX}" != "" ]]; then
-        INDEX=$(( INDEX + 1 ))
-        TOC_MAP[${LINE}]=${INDEX}
-        echo "[${LINE#\#* }](#${LINK}-${INDEX})"
-    else
-        TOC_MAP[${LINE}]=0
-        echo "[${LINE#\#* }](#${LINK})"
-    fi
+echo "🔍  Found ${#FILES[@]} README files. Updating TOCs…"
+
+for f in "${FILES[@]}"; do
+  echo "⚙️   $f"
+  # 1. generate fresh TOC
+  _gen_toc "$f" > "$TMP"
+
+  # 2. remove old TOC (everything from the header down to the next blank line)
+  gawk '
+    BEGIN {skip=0}
+    /^##[ ]+Table of Contents/ {print; skip=1; next}
+    skip && /^[[:space:]]*$/ {skip=0; next}
+    !skip {print}
+  ' "$f" > "${TMP}.body"
+
+  # 3. stitch new TOC + body
+  cat "$TMP" "${TMP}.body" > "${TMP}.new"
+
+  # 4. overwrite the file safely
+  if command -v sponge >/dev/null 2>&1; then
+    cat "${TMP}.new" | sponge "$f"
+  else
+    mv "${TMP}.new" "$f"
+  fi
 done
+
+rm -f "$TMP" "${TMP}.body" "${TMP}.new"
+echo "✅  All TOCs refreshed."

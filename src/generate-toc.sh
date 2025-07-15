@@ -7,7 +7,6 @@
 
   ROOT=${1:-.}                            # directory to scan, default = current repo root
   SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-  TMP=$(mktemp)
 
   # ------------------------------------------------------------------
   # Helper ─ generate a TOC for a single file and write it to stdout
@@ -21,8 +20,11 @@
     while IFS= read -r line; do
       [[ $line =~ ^\`\`\` ]] && { (( in_code ^= 1 )); continue; }
       (( in_code )) && continue
+      # Skip the TOC header itself
+      [[ $line == "## Table of Contents" ]] && continue
+      # Capture headers
       [[ $line =~ ^\#{1,6}[[:space:]] ]] && toc+=("$line")
-    done < <(grep -Ev '^## Table of Contents' "$md_file")
+    done < "$md_file"
 
     # Check if we found any headers
     if [[ ${#toc[@]} -eq 0 ]]; then
@@ -55,111 +57,88 @@
   for f in "${FILES[@]}"; do
     echo "⚙️   Processing $f" >&2
 
+    # Create backup
+    cp "$f" "${f}.backup"
+
     # 1. generate fresh TOC
-    if ! _gen_toc "$f" > "$TMP"; then
+    TMP_TOC=$(mktemp)
+    if ! _gen_toc "$f" > "$TMP_TOC"; then
       echo "⚠️   No headers found in $f, skipping..." >&2
+      rm -f "${f}.backup" "$TMP_TOC"
       continue
     fi
 
-    # Safety check: ensure TOC was generated
-    if [[ ! -s "$TMP" ]]; then
-      echo "⚠️   Warning: No TOC generated for $f, skipping..." >&2
+    # 2. Create new file content
+    TMP_NEW=$(mktemp)
+
+    # Read the original file and process it
+    local found_main_header=0
+    local skip_old_toc=0
+
+    while IFS= read -r line; do
+      # If we find "## Table of Contents", start skipping
+      if [[ "$line" == "## Table of Contents" ]]; then
+        skip_old_toc=1
+        continue
+      fi
+
+      # If we're skipping TOC and find a new section (## header) or after blank line + 
+  non-list line
+      if [[ $skip_old_toc -eq 1 ]]; then
+        if [[ "$line" =~ ^##[[:space:]] ]] || ([[ -z "$line" ]] && ! [[ "${next_line:-}" =~ 
+  ^[[:space:]]*- ]]); then
+          skip_old_toc=0
+        else
+          # Skip TOC content (list items)
+          [[ "$line" =~ ^[[:space:]]*- ]] && continue
+          [[ -z "$line" ]] && continue
+        fi
+      fi
+
+      # If this is the main header and we haven't inserted TOC yet
+      if [[ "$line" =~ ^#[[:space:]][^#] ]] && [[ $found_main_header -eq 0 ]]; then
+        echo "$line" >> "$TMP_NEW"
+        echo "" >> "$TMP_NEW"
+        cat "$TMP_TOC" >> "$TMP_NEW"
+        echo "" >> "$TMP_NEW"
+        found_main_header=1
+      elif [[ $skip_old_toc -eq 0 ]]; then
+        echo "$line" >> "$TMP_NEW"
+      fi
+    done < "$f"
+
+    # If no main header was found, prepend TOC at beginning
+    if [[ $found_main_header -eq 0 ]]; then
+      cat "$TMP_TOC" > "${TMP_NEW}.final"
+      echo "" >> "${TMP_NEW}.final"
+      cat "$TMP_NEW" >> "${TMP_NEW}.final"
+      mv "${TMP_NEW}.final" "$TMP_NEW"
+    fi
+
+    # Safety checks
+    if [[ ! -s "$TMP_NEW" ]]; then
+      echo "❌   ERROR: Result file is empty for $f" >&2
+      echo "     Restoring from backup..." >&2
+      mv "${f}.backup" "$f"
+      rm -f "$TMP_TOC" "$TMP_NEW"
       continue
     fi
 
-    # 2. Remove old TOC if it exists, otherwise keep entire file
-    if grep -q '^## Table of Contents' "$f"; then
-      echo "   Found existing TOC, removing it..." >&2
-      # Remove old TOC section only
-      awk '
-        BEGIN {in_toc=0; printed=0}
-        /^## Table of Contents/ {in_toc=1; next}
-        in_toc && /^[[:space:]]*$/ {
-          # Found blank line after TOC, check if we should end TOC section
-          getline nextline
-          if (nextline ~ /^[[:space:]]*-/) {
-            # Still in TOC (next line is a list item)
-            next
-          } else {
-            # End of TOC
-            in_toc=0
-            if (nextline != "") print nextline
-          }
-          next
-        }
-        in_toc && /^[[:space:]]*-/ {next}
-        !in_toc {print}
-      ' "$f" > "${TMP}.body"
-    else
-      echo "   No existing TOC found, keeping entire file..." >&2
-      # No TOC exists, just copy the entire file
-      cp "$f" "${TMP}.body"
-    fi
-
-    # Critical safety check: ensure body file is not empty
-    if [[ ! -s "${TMP}.body" ]]; then
-      echo "❌   ERROR: File body is empty after processing $f" >&2
-      echo "     This would delete all content! Skipping to prevent data loss." >&2
+    # Check we didn't lose too much content
+    original_size=$(wc -c < "${f}.backup")
+    new_size=$(wc -c < "$TMP_NEW")
+    if [[ $new_size -lt $((original_size / 2)) ]]; then
+      echo "❌   ERROR: New file is less than half the size of original" >&2
+      echo "     Restoring from backup..." >&2
+      mv "${f}.backup" "$f"
+      rm -f "$TMP_TOC" "$TMP_NEW"
       continue
     fi
 
-    # Additional check: ensure we didn't lose too much content
-    original_lines=$(wc -l < "$f")
-    body_lines=$(wc -l < "${TMP}.body")
-    if [[ $body_lines -lt $((original_lines / 2)) ]]; then
-      echo "⚠️   WARNING: Body has less than half the original lines ($body_lines vs 
-  $original_lines)" >&2
-      echo "     This might indicate an error. Proceeding with caution..." >&2
-    fi
-
-    # 3. Find where to insert the TOC
-    # If there's a main header (single #), insert TOC after it
-    # Otherwise, insert at the beginning
-    if grep -q '^#[[:space:]][^#]' "${TMP}.body"; then
-      echo "   Inserting TOC after main header..." >&2
-      awk -v toc_file="$TMP" '
-        BEGIN {printed_toc=0}
-        /^#[[:space:]][^#]/ && !printed_toc {
-          print
-          print ""
-          while ((getline line < toc_file) > 0) print line
-          print ""
-          printed_toc=1
-          next
-        }
-        {print}
-      ' "${TMP}.body" > "${TMP}.new"
-    else
-      echo "   Inserting TOC at beginning of file..." >&2
-      # No main header, prepend TOC at the beginning
-      cat "$TMP" > "${TMP}.new"
-      echo "" >> "${TMP}.new"
-      cat "${TMP}.body" >> "${TMP}.new"
-    fi
-
-    # Final safety check before overwriting
-    if [[ ! -s "${TMP}.new" ]]; then
-      echo "❌   ERROR: Result file is empty for $f, skipping!" >&2
-      continue
-    fi
-
-    new_lines=$(wc -l < "${TMP}.new")
-    if [[ $new_lines -lt 3 ]]; then
-      echo "❌   ERROR: Result file has too few lines ($new_lines) for $f, skipping!" >&2
-      continue
-    fi
-
-    # 4. overwrite the file safely
-    echo "   Writing updated file..." >&2
-    if command -v sponge >/dev/null 2>&1; then
-      cat "${TMP}.new" | sponge "$f"
-    else
-      mv "${TMP}.new" "$f"
-    fi
-
+    # All checks passed, update the file
+    mv "$TMP_NEW" "$f"
+    rm -f "${f}.backup" "$TMP_TOC"
     echo "✅   Successfully updated $f" >&2
   done
 
-  # Cleanup
-  rm -f "$TMP" "${TMP}.body" "${TMP}.new"
   echo "✅  All TOCs refreshed." >&2

@@ -21,12 +21,13 @@ _gen_toc() {
   while IFS= read -r line; do
     [[ $line =~ ^\`\`\` ]] && { (( in_code ^= 1 )); continue; }
     (( in_code )) && continue
-    [[ $line =~ ^\#{1,6}\  ]] && toc+=("$line")
+    [[ $line =~ ^\#{1,6}[[:space:]] ]] && toc+=("$line")
   done < <(grep -Ev '^## Table of Contents' "$md_file")
 
   printf '## Table of Contents\n\n'
   for h in "${toc[@]}"; do
-    local level=${h%%[!#]*}; local depth=${#level}
+    local level=${h%%[!#]*}            # "###"
+    local depth=${#level}              # 3
     local indent; indent=$(printf '  %.0s' $(seq 1 $((depth-1))))
     local text=${h#"$level"}; text=${text#" "}; text=${text%%[[:space:]]}
     local slug; slug=$(tr '[:upper:]' '[:lower:]' <<<"$text" \
@@ -42,12 +43,12 @@ _gen_toc() {
 # Main loop ─ iterate over every README*.md
 # ------------------------------------------------------------------
 mapfile -d '' FILES < <(find "$ROOT" -type f -iname 'README*.md' -print0 | sort -z)
-[[ ${#FILES[@]} -eq 0 ]] && { echo "No README*.md files found in $ROOT"; exit 0; }
+[[ ${#FILES[@]} -eq 0 ]] && { echo "No README*.md files found in $ROOT" >&2; exit 0; }
 
-echo "🔍  Found ${#FILES[@]} README files. Updating TOCs…"
+echo "🔍  Found ${#FILES[@]} README files. Updating TOCs…" >&2
 
 for f in "${FILES[@]}"; do
-  echo "⚙️   $f"
+  echo "⚙️   $f" >&2
   # 1. generate fresh TOC
   _gen_toc "$f" > "$TMP"
 
@@ -71,4 +72,4 @@ for f in "${FILES[@]}"; do
 done
 
 rm -f "$TMP" "${TMP}.body" "${TMP}.new"
-echo "✅  All TOCs refreshed."
+echo "✅  All TOCs refreshed." >&2

@@ -1,110 +1,191 @@
+
   #!/usr/bin/env bash
 
-  set -euo pipefail
+  # Simple TOC Generator for README files
+  # This script generates a Table of Contents for all README*.md files
+  # Compatible with GitHub Actions and different repository structures
 
-  # Process a single file
-  process_file() {
+  set -e
+
+  # Configuration - can be overridden by environment variables or parameters
+  CONTENT_DIR="${1:-${INPUT_TARGET_DIR:-Content}}"
+  TOC_HEADER="${TOC_HEADER:-## Table of Contents}"
+  WORKSPACE_DIR="${GITHUB_WORKSPACE:-$(pwd)}"
+
+  # Ensure we're working in the correct directory
+  cd "$WORKSPACE_DIR"
+
+  # Function to generate slug from header text
+  make_slug() {
+      echo "$1" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9 -]//g' | tr ' ' '-' | sed
+  's/-\+/-/g' | sed 's/^-//;s/-$//'
+  }
+
+  # Function to process a single README file
+  process_readme() {
       local file="$1"
+      echo "Processing: $file" >&2
 
-      # Read the entire file into a variable
+      # Create backup
+      cp "$file" "$file.bak"
+
+      # Read file content
       local content
-      content=$(cat "$file")
+      if ! content=$(cat "$file" 2>/dev/null); then
+          echo "  Error: Cannot read file, skipping" >&2
+          rm -f "$file.bak"
+          return
+      fi
 
-      # Skip if file is empty
+      # Check if file has content
       if [[ -z "$content" ]]; then
-          echo "Skipping empty file: $file" >&2
+          echo "  Warning: File is empty, skipping" >&2
+          rm -f "$file.bak"
           return
       fi
 
-      # Generate TOC content
-      local toc="## Table of Contents\n\n"
-      local has_headers=false
+      # Extract all headers except TOC header
+      local headers
+      headers=$(echo "$content" | grep -E '^#{1,6} ' | grep -v "^$TOC_HEADER$" || true)
 
-      # Process each line
-      while IFS= read -r line; do
-          if [[ "$line" =~ ^#{1,6}[[:space:]] ]] && [[ "$line" != "## Table of Contents" ]]; 
-  then
-              has_headers=true
-              # Count the number of # characters
-              local hashes="${line%%[^#]*}"
-              local level=${#hashes}
-
-              # Get the text after the hashes and space
-              local text="${line#*# }"
-
-              # Create the slug (link)
-              local slug=$(echo "$text" | tr '[:upper:]' '[:lower:]' | tr ' ' '-' | tr -cd
-  '[:alnum:]-')
-
-              # Add indentation
-              local indent=""
-              for ((i=1; i<level; i++)); do
-                  indent="${indent}  "
-              done
-
-              # Add to TOC
-              toc="${toc}${indent}- [${text}](#${slug})\n"
-          fi
-      done <<< "$content"
-
-      # Skip if no headers found
-      if [[ "$has_headers" == "false" ]]; then
-          echo "No headers found in: $file" >&2
+      # Check if there are any headers
+      if [[ -z "$headers" ]]; then
+          echo "  No headers found, skipping" >&2
+          rm -f "$file.bak"
           return
       fi
 
-      # Remove existing TOC if present
-      local new_content
-      if echo "$content" | grep -q '^## Table of Contents'; then
-          # Remove from "## Table of Contents" until the next ## header or two consecutive 
-  newlines
-          new_content=$(echo "$content" | awk '
-              BEGIN { in_toc = 0 }
-              /^## Table of Contents/ { in_toc = 1; next }
-              in_toc && /^## / && !/^## Table of Contents/ { in_toc = 0 }
-              in_toc && /^$/ { 
-                  getline
-                  if (/^$/ || /^## /) {
-                      in_toc = 0
-                      if (/^## /) print
-                  }
-                  next
+      # Generate TOC
+      local toc="$TOC_HEADER"$'\n\n'
+
+      while IFS= read -r header; do
+          # Skip empty lines
+          [[ -z "$header" ]] && continue
+
+          # Count # symbols for level
+          local level
+          level=$(echo "$header" | sed 's/[^#].*//' | wc -c)
+          level=$((level - 1))
+
+          # Extract header text (remove all # symbols and spaces)
+          local text
+          text=$(echo "$header" | sed 's/^#\+ *//')
+
+          # Generate slug
+          local slug
+          slug=$(make_slug "$text")
+
+          # Add indentation (2 spaces per level, starting from level 2)
+          local indent=""
+          for ((i=2; i<=level; i++)); do
+              indent="  $indent"
+          done
+
+          # Add to TOC
+          toc="$toc$indent- [$text](#$slug)"$'\n'
+      done <<< "$headers"
+
+      # Remove existing TOC section if present
+      local content_without_toc="$content"
+      if echo "$content" | grep -q "^$TOC_HEADER$"; then
+          # Remove everything from TOC header to the next header or double newline
+          content_without_toc=$(echo "$content" | awk -v toc_header="$TOC_HEADER" '
+              BEGIN { skip = 0; blank_count = 0 }
+              $0 == toc_header { skip = 1; next }
+              skip && /^#{1,6} / { skip = 0 }
+              skip && /^$/ { 
+                  blank_count++
+                  if (blank_count >= 2) skip = 0
+                  next 
               }
-              !in_toc { print }
+              skip && /^- / { next }
+              !skip { print; blank_count = 0 }
           ')
-      else
-          new_content="$content"
       fi
 
-      # Find where to insert TOC
-      local final_content
-      if echo "$new_content" | grep -q '^# '; then
-          # Insert after main title
-          final_content=$(echo "$new_content" | awk -v toc="$(echo -e "$toc")" '
-              /^# / { print; print ""; print toc; found=1; next }
-              { print }
-          ')
-      else
-          # Insert at beginning
-          final_content=$(echo -e "${toc}\n${new_content}")
+      # Find position to insert TOC
+      local new_content=""
+      local inserted=0
+
+      # Try to insert after main title (single #)
+      while IFS= read -r line; do
+          new_content="$new_content$line"$'\n'
+
+          if [[ $inserted -eq 0 ]] && [[ "$line" =~ ^#[[:space:]] ]]; then
+              new_content="$new_content"$'\n'"$toc"$'\n'
+              inserted=1
+          fi
+      done <<< "$content_without_toc"
+
+      # If no main title found, prepend TOC
+      if [[ $inserted -eq 0 ]]; then
+          new_content="$toc"$'\n\n'"$content_without_toc"
       fi
 
-      # Write to file ONLY if we have content
-      if [[ -n "$final_content" ]] && [[ ${#final_content} -gt 10 ]]; then
-          echo "$final_content" > "$file"
-          echo "✓ Updated: $file" >&2
-      else
-          echo "✗ ERROR: Would create empty file, skipping: $file" >&2
+      # Safety check: ensure new content is not too small
+      local orig_size new_size
+      orig_size=$(echo "$content" | wc -c)
+      new_size=$(echo "$new_content" | wc -c)
+
+      if [[ $new_size -lt $((orig_size / 3)) ]]; then
+          echo "  ERROR: New content is too small (${new_size} vs ${orig_size} bytes)" >&2
+          echo "  Restoring from backup" >&2
+          mv "$file.bak" "$file"
+          return 1
       fi
+
+      # Write new content
+      if ! echo "$new_content" > "$file"; then
+          echo "  ERROR: Failed to write file" >&2
+          mv "$file.bak" "$file"
+          return 1
+      fi
+
+      # Remove backup
+      rm -f "$file.bak"
+
+      echo "  ✓ Updated successfully" >&2
   }
 
   # Main execution
-  echo "🔍 Starting TOC generation..." >&2
+  echo "TOC Generator - Starting" >&2
+  echo "Workspace: $WORKSPACE_DIR" >&2
+  echo "Content directory: $CONTENT_DIR" >&2
 
-  # Find and process all README files
-  find "${1:-.}" -type f -iname 'README*.md' | while IFS= read -r file; do
-      echo "📄 Processing: $file" >&2
-      process_file "$file"
-  done
+  # Check if content directory exists
+  if [[ ! -d "$CONTENT_DIR" ]]; then
+      echo "Warning: Content directory '$CONTENT_DIR' does not exist" >&2
+      echo "Looking for README files in current directory instead" >&2
+      CONTENT_DIR="."
+  fi
 
-  echo "✅ TOC generation complete!" >&2
+  # Find all README files
+  readme_files=$(find "$CONTENT_DIR" -name "README*.md" -type f 2>/dev/null | sort || true)
+
+  if [[ -z "$readme_files" ]]; then
+      echo "No README files found in $CONTENT_DIR" >&2
+      exit 0
+  fi
+
+  echo "Found $(echo "$readme_files" | wc -l) README files" >&2
+
+  # Process each file
+  success_count=0
+  error_count=0
+
+  while IFS= read -r file; do
+      if process_readme "$file"; then
+          ((success_count++))
+      else
+          ((error_count++))
+      fi
+  done <<< "$readme_files"
+
+  echo "TOC Generator - Complete" >&2
+  echo "Successfully processed: $success_count files" >&2
+  echo "Errors encountered: $error_count files" >&2
+
+  # Exit with error if any files failed
+  if [[ $error_count -gt 0 ]]; then
+      exit 1
+  fi

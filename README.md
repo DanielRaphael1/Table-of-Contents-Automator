@@ -1,6 +1,7 @@
 # Table of Contents Generator
 
 A simple and safe Table of Contents generator for Markdown files that can be used as a standalone script or GitHub Action.
+Don't forget to leave a ⭐ if you found this helpful 
 
 ## Table of Contents
 

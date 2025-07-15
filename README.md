@@ -1,116 +1,143 @@
-# DevOps Zero to Hero
+# TocScript
 
-A comprehensive DevOps learning repository with automated Table of Contents generation for all documentation.
+A simple and safe Table of Contents generator for Markdown files that can be used as a standalone script or GitHub Action.
 
 ## Table of Contents
 
 - [Overview](#overview)
-- [Repository Structure](#repository-structure)
-- [TOC Generator](#toc-generator)
-  - [How It Works](#how-it-works)
-  - [Manual Usage](#manual-usage)
-  - [Automated Workflow](#automated-workflow)
-- [Content Organization](#content-organization)
+- [Features](#features)
+- [Usage](#usage)
+  - [As a Standalone Script](#as-a-standalone-script)
+  - [As a GitHub Action](#as-a-github-action)
+- [How It Works](#how-it-works)
+- [Safety Features](#safety-features)
+- [Configuration](#configuration)
+- [Examples](#examples)
 - [Contributing](#contributing)
-- [Getting Started](#getting-started)
 
 ## Overview
 
-This repository contains comprehensive DevOps tutorials, guides, and examples covering various technologies and practices. All documentation includes automatically generated Table of Contents for better navigation.
+TocScript automatically generates and updates Table of Contents for all `README*.md` files in your project. It's designed to be safe, reliable, and easy to use both locally and in CI/CD pipelines.
 
-## Repository Structure
+## Features
 
-```
-DevOps-Zero2Hero/
-├── Content/                    # All learning materials
-│   ├── Linux/                 # Linux tutorials
-│   ├── Docker/                # Docker guides
-│   ├── Kubernetes/            # K8s resources
-│   ├── Terraform/             # Infrastructure as Code
-│   ├── CI-CD/                 # Pipeline tutorials
-│   └── ...                    # More topics
-├── generate-toc.sh            # TOC generator script
-├── .github/workflows/         # GitHub Actions
-│   └── toc-generator.yaml    # Automated TOC updates
-└── README.md                  # This file
-```
+- 🔍 **Automatic Detection** - Finds all README files in specified directories
+- 📋 **Header Extraction** - Supports H1-H6 headers with proper nesting
+- 🔗 **GitHub-Compatible Links** - Generates proper anchor links
+- 🛡️ **Safety First** - Multiple validation checks prevent data loss
+- 💾 **Backup Creation** - Creates backups before modifying files
+- 🎯 **Flexible Usage** - Works as script or GitHub Action
+- 📝 **Smart Insertion** - Places TOC after main title or at beginning
 
-## TOC Generator
+## Usage
 
-This repository includes a powerful Table of Contents generator that automatically creates navigation links for all README files.
-
-### How It Works
-
-The TOC generator:
-- 🔍 Scans all `README*.md` files in the specified directory
-- 📋 Extracts headers (H1-H6) and creates navigation links
-- 🔗 Generates GitHub-compatible anchor links
-- 📝 Inserts TOC after the main title or at the beginning
-- 🛡️ Includes safety checks to prevent data loss
-- 💾 Creates backups before modifying files
-
-### Manual Usage
-
-Run the TOC generator locally:
+### As a Standalone Script
 
 ```bash
-# Make script executable (first time only)
+# Download the script
+curl -o generate-toc.sh https://raw.githubusercontent.com/DanielRaphael1/TocScript/main/src/generate-toc.sh
 chmod +x generate-toc.sh
 
-# Generate TOCs for Content folder
-./generate-toc.sh Content
-
-# Generate TOCs for specific subfolder
-./generate-toc.sh Content/Linux
-
 # Generate TOCs for current directory
-./generate-toc.sh .
+./generate-toc.sh
+
+# Generate TOCs for specific folder
+./generate-toc.sh docs
+
+# Generate TOCs for multiple folders
+./generate-toc.sh src/docs
 ```
 
-**Example Output:**
-```
-TOC Generator - Starting
-Content directory: Content
-Processing: Content/Linux/README.md
-  ✓ Updated successfully
-Processing: Content/Docker/README.md
-  ✓ Updated successfully
-TOC Generator - Complete
-Successfully processed: 2 files
-Errors encountered: 0 files
-```
+### As a GitHub Action
 
-### Automated Workflow
+Add to your `.github/workflows/toc.yml`:
 
-The repository includes a GitHub Actions workflow that automatically updates TOCs:
+```yaml
+name: Update TOCs
 
-**Triggers:**
-- 📝 When README files in `Content/` are modified
-- 🔄 On pull requests affecting `Content/` READMEs  
-- 🎯 Manual trigger via GitHub Actions tab
+on:
+  push:
+    paths:
+      - '**/*.md'
+  pull_request:
+    paths:
+      - '**/*.md'
 
-**What it does:**
-1. Checks out the repository
-2. Runs the TOC generator on the `Content/` folder
-3. Commits and pushes changes automatically
-4. Uses `github-actions[bot]` as the commit author
-
-**Workflow file:** `.github/workflows/toc-generator.yaml`
-
-## Content Organization
-
-Each topic in the `Content/` directory follows this structure:
-
-```
-Content/TopicName/
-├── README.md              # Main topic overview with TOC
-├── subtopic1.md          # Detailed guides
-├── subtopic2.md          # Examples and tutorials
-├── examples/             # Code examples
-└── exercises/            # Hands-on exercises
+jobs:
+  update-toc:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      
+      - uses: DanielRaphael1/TocScript@main
+        with:
+          target-dir: docs  # Optional, defaults to current directory
+      
+      - name: Commit changes
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add "**/*.md"
+          git diff --cached --quiet || git commit -m "chore: update TOCs"
+          git push
 ```
 
-**TOC Example:**
+## How It Works
+
+1. **Scans Directory** - Recursively finds all `README*.md` files
+2. **Extracts Headers** - Parses markdown headers (H1-H6)
+3. **Generates Links** - Creates GitHub-compatible anchor links
+4. **Removes Old TOC** - Safely removes existing TOC sections
+5. **Inserts New TOC** - Places TOC after main title or at beginning
+6. **Validates Output** - Ensures file integrity before saving
+
+## Safety Features
+
+- ✅ **File Backups** - Creates `.bak` files before modification
+- ✅ **Content Validation** - Checks file size and content integrity
+- ✅ **Error Recovery** - Restores from backup if generation fails
+- ✅ **Skip Empty Files** - Ignores files without headers
+- ✅ **Duplicate Detection** - Handles duplicate header names
+- ✅ **Code Block Awareness** - Ignores headers inside code blocks
+
+## Configuration
+
+### Environment Variables
+
+- `INPUT_TARGET_DIR` - Target directory (for GitHub Actions)
+- `TOC_HEADER` - Custom TOC header (default: "## Table of Contents")
+- `GITHUB_WORKSPACE` - Workspace directory (automatically set in Actions)
+
+### Script Parameters
+
+```bash
+./generate-toc.sh [directory]
+```
+
+- `directory` - Target directory (optional, defaults to current directory)
+
+## Examples
+
+### Basic Usage
+
+```bash
+# Generate TOCs for all README files in current directory
+./generate-toc.sh
+
+# Output:
+# TOC Generator - Starting
+# Content directory: .
+# Processing: ./README.md
+#   ✓ Updated successfully
+# TOC Generator - Complete
+# Successfully processed: 1 files
+# Errors encountered: 0 files
+```
+
+### Generated TOC Format
+
 ```markdown
 ## Table of Contents
 
@@ -118,74 +145,84 @@ Content/TopicName/
 - [Getting Started](#getting-started)
   - [Prerequisites](#prerequisites)
   - [Installation](#installation)
-- [Advanced Topics](#advanced-topics)
+- [Advanced Usage](#advanced-usage)
   - [Configuration](#configuration)
-  - [Best Practices](#best-practices)
+  - [Customization](#customization)
+```
+
+### Before and After
+
+**Before:**
+```markdown
+# My Project
+
+This is my awesome project.
+
+## Installation
+
+Install with npm...
+
+## Usage
+
+Use it like this...
+```
+
+**After:**
+```markdown
+# My Project
+
+## Table of Contents
+
+- [Installation](#installation)
+- [Usage](#usage)
+
+This is my awesome project.
+
+## Installation
+
+Install with npm...
+
+## Usage
+
+Use it like this...
 ```
 
 ## Contributing
 
-We welcome contributions! Here's how to add content:
+1. Fork the repository
+2. Create a feature branch (`git checkout -b feature/amazing-feature`)
+3. Make your changes
+4. Test thoroughly
+5. Commit your changes (`git commit -m 'Add amazing feature'`)
+6. Push to the branch (`git push origin feature/amazing-feature`)
+7. Open a Pull Request
 
-### Adding New Content
+### Development
 
-1. **Fork the repository**
-2. **Create your content** in the appropriate `Content/` subfolder
-3. **Add headers** to your README files (the TOC will be generated automatically)
-4. **Submit a pull request**
+```bash
+# Clone the repository
+git clone https://github.com/DanielRaphael1/TocScript.git
+cd TocScript
 
-### Content Guidelines
+# Test the script
+./src/generate-toc.sh test/
 
-- 📖 Use clear, descriptive headers
-- 🏗️ Follow the established folder structure
-- 📝 Include practical examples and exercises
-- 🎯 Focus on hands-on learning
-- 🔗 Link to external resources when helpful
-
-### TOC Guidelines
-
-- ✅ Headers are automatically detected (H1-H6: `#` to `######`)
-- ✅ TOC header must be exactly `## Table of Contents`
-- ✅ Existing TOCs are automatically updated
-- ✅ No manual TOC maintenance required
-
-## Getting Started
-
-1. **Clone the repository:**
-   ```bash
-   git clone https://github.com/DanielRaphael1/DevOps-Zero2Hero.git
-   cd DevOps-Zero2Hero
-   ```
-
-2. **Explore the content:**
-   ```bash
-   ls Content/
-   ```
-
-3. **Start with a topic:**
-   ```bash
-   cd Content/Linux
-   cat README.md
-   ```
-
-4. **Generate TOCs locally (optional):**
-   ```bash
-   ./generate-toc.sh Content
-   ```
+# Run tests (if available)
+./test/run-tests.sh
+```
 
 ---
 
-## Features
+## License
 
-- 🤖 **Automated TOC generation** for all documentation
-- 📚 **Comprehensive DevOps coverage** from basics to advanced
-- 🛡️ **Safe script execution** with backup and validation
-- 🔄 **GitHub Actions integration** for automatic updates
-- 📖 **Structured learning path** with clear navigation
-- 🎯 **Hands-on examples** and practical exercises
+MIT License - see [LICENSE](LICENSE) file for details.
+
+## Support
+
+- 🐛 [Report Issues](https://github.com/DanielRaphael1/TocScript/issues)
+- 💬 [Discussions](https://github.com/DanielRaphael1/TocScript/discussions)
+- 📧 [Contact](mailto:your-email@example.com)
 
 ---
 
-**Happy Learning!** 🚀
-
-For questions or suggestions, please open an issue or submit a pull request.
+**Made with ❤️ for the developer community**

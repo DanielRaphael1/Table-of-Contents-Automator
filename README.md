@@ -214,16 +214,11 @@ cd TocScript
 
 ---
 
-## License
-
-MIT License - see [LICENSE](LICENSE) file for details.
 
 ## Support
 
 - 🐛 [Report Issues](https://github.com/DanielRaphael1/TocScript/issues)
 - 💬 [Discussions](https://github.com/DanielRaphael1/TocScript/discussions)
-- 📧 [Contact](mailto:your-email@example.com)
-
 ---
 
 **Made with ❤️ for the developer community**
